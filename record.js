@@ -14,7 +14,7 @@ if (!LIVE_ID) {
 
 let cookies = [];
 try {
-  cookies = JSON.parse(process.env.OTO_COOKIES || '[]');
+  cookies = JSON.parse((process.env.OTO_COOKIES || '[]').replace(/^\uFEFF/, ''));
 } catch (e) {
   console.log('cookie parse error', e.message);
 }

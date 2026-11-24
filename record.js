@@ -45,8 +45,9 @@ async function stillLive() {
   const ctx = await browser.newContext({
     userAgent:
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    viewport: { width: 1280, height: 800 },
+    viewport: { width: 1280, height: 900 },
     locale: 'ja-JP',
+    recordVideo: { dir: path.join(OUT, 'video'), size: { width: 1280, height: 900 } },
   });
 
   const normalized = cookies.map((c) => ({
@@ -95,7 +96,7 @@ async function stillLive() {
     } catch (e) {
       console.log('eval err', e.message);
     }
-    if (st && Date.now() - lastLog > 30000) {
+    if (st && Date.now() - lastLog > 60000) {
       console.log('state', JSON.stringify(st));
       lastLog = Date.now();
     }
@@ -113,6 +114,22 @@ async function stillLive() {
     await page.evaluate(() => window.__stopRec && window.__stopRec());
   } catch (e) {}
   await page.waitForTimeout(8000);
+
+  try {
+    const v = page.video();
+    await page.close();
+    await ctx.close();
+    if (v) {
+      const videoPath = await v.path();
+      console.log('video path', videoPath);
+      if (videoPath && fs.existsSync(videoPath)) {
+        fs.copyFileSync(videoPath, path.join(OUT, 'screen.webm'));
+        console.log('screen.webm copied', fs.statSync(path.join(OUT, 'screen.webm')).size);
+      }
+    }
+  } catch (e) {
+    console.log('video save err', e.message);
+  }
   await browser.close();
   console.log('done, chunks =', count);
 })();

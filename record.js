@@ -88,8 +88,6 @@ async function stillLive() {
 
   const started = Date.now();
   let lastLog = 0;
-  let chatRaw = '';
-  let chatFile = path.join(OUT, 'chat_raw.log');
   while (true) {
     await page.waitForTimeout(15000);
     let st = null;
@@ -97,18 +95,6 @@ async function stillLive() {
       st = await page.evaluate(() => window.__recState || null);
     } catch (e) {
       console.log('eval err', e.message);
-    }
-    try {
-      const snap = await page.evaluate(() => document.body.innerText || '');
-      if (snap && snap !== chatRaw) {
-        chatRaw = snap;
-        fs.writeFileSync(
-          chatFile,
-          `===== ${new Date().toISOString()} =====\n${snap}\n`
-        );
-      }
-    } catch (e) {
-      console.log('chat snapshot err', e.message);
     }
     if (st && Date.now() - lastLog > 60000) {
       console.log('state', JSON.stringify(st));

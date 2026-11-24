@@ -1,0 +1,80 @@
+name: otobanana-record
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      live_id:
+        description: 'livestream post id (empty = auto detect)'
+        required: false
+        default: ''
+
+concurrency:
+  group: otobanana-record
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      live_id: ${{ steps.detect.outputs.live_id }}
+      title: ${{ steps.detect.outputs.title }}
+    steps:
+      - id: detect
+        run: |
+          set -e
+          ID="${{ github.event.inputs.live_id }}"
+          if [ -z "$ID" ]; then
+            RESP=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/a28c1be1-bb11-43fc-935a-c6c85bbb40e7/livestreams/?is_adult=1")
+            ID=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.id // empty')
+            TITLE=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.title // empty')
+          else
+            TITLE="manual"
+          fi
+          echo "live_id=$ID" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "detected live_id=$ID title=$TITLE"
+
+  record:
+    needs: check
+    if: needs.check.outputs.live_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Record
+        env:
+          LIVE_ID: ${{ needs.check.outputs.live_id }}
+          OTO_COOKIES: ${{ secrets.OTO_COOKIES }}
+          OUT_DIR: out
+          TITLE: ${{ needs.check.outputs.title }}
+        run: node record.js
+
+      - name: Convert audio
+        if: always()
+        run: |
+          ls -la out || true
+          if ls out/*.webm >/dev/null 2>&1; then
+            cat $(ls out/*.webm | sort) > out/all.webm
+            ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k "out/recording.m4a" || true
+            ls -la out
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-${{ needs.check.outputs.live_id }}-${{ github.run_id }}
+          path: out
+          retention-days: 30
+          if-no-files-found: warn

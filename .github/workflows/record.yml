@@ -25,11 +25,11 @@ jobs:
       - id: detect
         run: |
           set -e
-          UID=a28c1be1-bb11-43fc-935a-c6c85bbb40e7
-          AVATAR=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$UID/" | jq -r '.avatar_url // empty')
+          USER_ID=a28c1be1-bb11-43fc-935a-c6c85bbb40e7
+          AVATAR=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$USER_ID/" | jq -r '.avatar_url // empty')
           ID="${{ github.event.inputs.live_id }}"
           if [ -z "$ID" ]; then
-            RESP=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$UID/livestreams/?is_adult=1")
+            RESP=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$USER_ID/livestreams/?is_adult=1")
             ID=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.id // empty')
             TITLE=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.title // empty')
           else

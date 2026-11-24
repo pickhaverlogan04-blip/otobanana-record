@@ -1,0 +1,12 @@
+{
+  "name": "otobanana-record",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Record OTOBANANA live streams from GitHub Actions",
+  "scripts": {
+    "record": "node record.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

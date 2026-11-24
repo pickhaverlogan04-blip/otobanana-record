@@ -20,13 +20,16 @@ jobs:
     outputs:
       live_id: ${{ steps.detect.outputs.live_id }}
       title: ${{ steps.detect.outputs.title }}
+      avatar: ${{ steps.detect.outputs.avatar }}
     steps:
       - id: detect
         run: |
           set -e
+          UID=a28c1be1-bb11-43fc-935a-c6c85bbb40e7
+          AVATAR=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$UID/" | jq -r '.avatar_url // empty')
           ID="${{ github.event.inputs.live_id }}"
           if [ -z "$ID" ]; then
-            RESP=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/a28c1be1-bb11-43fc-935a-c6c85bbb40e7/livestreams/?is_adult=1")
+            RESP=$(curl -s --max-time 30 "https://api.v2.otobanana.com/api/users/$UID/livestreams/?is_adult=1")
             ID=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.id // empty')
             TITLE=$(echo "$RESP" | jq -r '[.data[] | select(.is_open == true)][0].post.title // empty')
           else
@@ -34,7 +37,8 @@ jobs:
           fi
           echo "live_id=$ID" >> $GITHUB_OUTPUT
           echo "title=$TITLE" >> $GITHUB_OUTPUT
-          echo "detected live_id=$ID title=$TITLE"
+          echo "avatar=$AVATAR" >> $GITHUB_OUTPUT
+          echo "detected live_id=$ID title=$TITLE avatar=$AVATAR"
 
   record:
     needs: check
@@ -61,13 +65,26 @@ jobs:
           TITLE: ${{ needs.check.outputs.title }}
         run: node record.js
 
-      - name: Convert audio
+      - name: Convert audio and video
         if: always()
+        env:
+          AVATAR: ${{ needs.check.outputs.avatar }}
         run: |
           ls -la out || true
           if ls out/*.webm >/dev/null 2>&1; then
             cat $(ls out/*.webm | sort) > out/all.webm
             ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k "out/recording.m4a" || true
+            if [ -s out/recording.m4a ]; then
+              curl -sL --max-time 30 "$AVATAR" -o out/cover.png || true
+              if [ -s out/cover.png ]; then
+                ffmpeg -y -loop 1 -framerate 1 -i out/cover.png -i out/recording.m4a \
+                  -vf "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black" \
+                  -c:v libx264 -tune stillimage -pix_fmt yuv420p -c:a copy -shortest "out/recording.mp4" || true
+              else
+                ffmpeg -y -f lavfi -i color=c=black:s=1080x1080:r=1 -i out/recording.m4a \
+                  -c:v libx264 -tune stillimage -pix_fmt yuv420p -c:a copy -shortest "out/recording.mp4" || true
+              fi
+            fi
             ls -la out
           fi
 

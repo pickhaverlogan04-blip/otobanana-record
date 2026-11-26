@@ -57,6 +57,7 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: pw-chromium-Linux-v1
+
       - name: Install deps
         run: |
           sudo apt-get update -qq
@@ -102,8 +103,32 @@ jobs:
           fi
           ls -la out
 
-      - uses: actions/upload-artifact@v4
+      - name: Drop silent result
         if: always()
+        run: |
+          if [ ! -s out/recording.m4a ]; then
+            echo "::error::no audio recorded at all, nothing to keep"
+            rm -rf out/*
+            exit 1
+          fi
+          MV=$(ffmpeg -hide_banner -i out/recording.m4a -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [-0-9.]*' | head -1 | grep -o '[-0-9.]*$')
+          echo "mean_volume=$MV"
+          if [ -z "$MV" ]; then
+            echo "::error::cannot measure volume, drop"
+            rm -rf out/*
+            exit 1
+          fi
+          VERDICT=$(awk -v v="$MV" 'BEGIN{ if (v+0 < -80) print "silent"; else print "ok" }')
+          echo "verdict=$VERDICT"
+          if [ "$VERDICT" = "silent" ]; then
+            echo "::error::recording is silent ($MV dB), dropping per user requirement"
+            rm -rf out/*
+            exit 1
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: live-${{ needs.check.outputs.live_id }}-${{ github.run_id }}
           path: out

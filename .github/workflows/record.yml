@@ -70,6 +70,7 @@ jobs:
         env:
           AVATAR: ${{ needs.check.outputs.avatar }}
         run: |
+          rm -rf out/video || true
           ls -la out || true
           if ls out/part_*.webm >/dev/null 2>&1; then
             cat $(ls out/part_*.webm | sort) > out/all.webm

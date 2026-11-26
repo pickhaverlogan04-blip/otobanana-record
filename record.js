@@ -88,7 +88,17 @@ async function stillLive() {
 
   const started = Date.now();
   let lastLog = 0;
-  let volumeChecked = false;
+  let volChecks = 0;
+  function measureVolume() {
+    const part = path.join(OUT, 'part_0001.webm');
+    if (!fs.existsSync(part)) return null;
+    try {
+      const r = require('child_process').spawnSync('ffmpeg', ['-hide_banner', '-i', part, '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
+      const txt = String((r.stderr || '') + (r.stdout || ''));
+      const m = txt.match(/mean_volume:\s*(-?[\d.]+) dB/);
+      return m ? parseFloat(m[1]) : null;
+    } catch (e) { return null; }
+  }
   while (true) {
     await page.waitForTimeout(15000);
     let st = null;
@@ -97,21 +107,18 @@ async function stillLive() {
     } catch (e) {
       console.log('eval err', e.message);
     }
-    if (!volumeChecked && Date.now() - started > 180000) {
-      volumeChecked = true;
-      const part = path.join(OUT, 'part_0001.webm');
-      if (fs.existsSync(part)) {
+    if (volChecks < 3 && Date.now() - started > (volChecks + 1) * 90000) {
+      volChecks++;
+      const mv = measureVolume();
+      console.log(`VOLUME_CHECK #${volChecks} mean_volume=${mv} dB (silent if ~-91)`);
+      if (mv === null || mv < -80) {
+        console.log('AUDIO SILENT -> triggering repair');
         try {
-          const r = require('child_process').spawnSync('ffmpeg', ['-hide_banner', '-i', part, '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
-          const txt = String((r.stderr || '') + (r.stdout || ''));
-          const m = txt.match(/mean_volume:\s*(-?[\d.]+) dB/);
-          console.log('VOLUME_CHECK mean_volume=' + (m ? m[1] : 'unknown') + ' dB (silent if -91)');
-        } catch (e) { console.log('volume check err', e.message); }
-      } else {
-        console.log('VOLUME_CHECK no chunk yet');
+          const rep = await page.evaluate(() => (window.__repairAudio ? window.__repairAudio() : 'no-repair-hook'));
+          console.log('REPAIR result:', rep);
+        } catch (e) { console.log('repair err', e.message); }
       }
-    }
-    if (st && Date.now() - lastLog > 60000) {
+    }if (st && Date.now() - lastLog > 60000) {
       console.log('state', JSON.stringify(st));
       lastLog = Date.now();
     }

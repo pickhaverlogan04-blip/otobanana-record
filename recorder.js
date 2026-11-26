@@ -113,6 +113,54 @@
     S.err = 'hook:' + (e && e.message ? e.message : e);
   }
 
+  // 自动修复：静音时依次尝试多种取音策略
+  window.__repairAudio = function () {
+    var tried = [];
+    S.repairCount = (S.repairCount || 0) + 1;
+
+    try {
+      // 策略1：把所有已知 tap 节点重新接到新的 dest 并重启录制
+      if (tapCtx && tapNodes.length) {
+        var d2 = tapCtx.createMediaStreamDestination();
+        var ok = 0;
+        for (var i = 0; i < tapNodes.length; i++) {
+          try { origConnect.call(tapNodes[i], d2); ok++; } catch (e) {}
+        }
+        if (ok > 0) {
+          tapDest = d2;
+          tried.push('retap:' + ok);
+          startRec(d2.stream, 'repair-retap');
+        }
+      }
+    } catch (e) { tried.push('retapErr:' + e.message); }
+
+    try {
+      // 策略2：从页面 media 元素抓 captureStream
+      var els = document.querySelectorAll('audio,video');
+      var got = 0;
+      for (var j = 0; j < els.length; j++) {
+        try {
+          var s = els[j].captureStream ? els[j].captureStream() : null;
+          if (s && s.getAudioTracks().length) {
+            fromTrack(s.getAudioTracks()[0]);
+            got++;
+            break;
+          }
+        } catch (e) {}
+      }
+      tried.push('media:' + got);
+    } catch (e) { tried.push('mediaErr:' + e.message); }
+
+    try {
+      // 策略3：重新 resume 所有 AudioContext
+      if (tapCtx) { try { tapCtx.resume(); } catch (e) {} }
+      tried.push('ctx=' + (tapCtx ? tapCtx.state : 'none'));
+    } catch (e) {}
+
+    S.lastRepair = tried.join('|');
+    return S.lastRepair;
+  };
+
   function fromTrack(track) {
     S.tracks++;
     try { if (track.muted) S.muted = true; } catch (e) {}

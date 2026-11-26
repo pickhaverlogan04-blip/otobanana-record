@@ -116,7 +116,7 @@
   function fromTrack(track) {
     S.tracks++;
     try { if (track.muted) S.muted = true; } catch (e) {}
-    if (started) return;
+    if (started && S.chunks > 0) return;
     try {
       var AC2 = window.AudioContext || window.webkitAudioContext;
       var ctx = new AC2();
@@ -181,7 +181,7 @@
 
   // 无 MediaStream 时的兜底：从页面 audio/video 元素抓音轨
   setInterval(function () {
-    if (started) return;
+    if (started && S.chunks > 0) return;
     var els = document.querySelectorAll('audio,video');
     for (var i = 0; i < els.length; i++) {
       try {

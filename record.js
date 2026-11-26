@@ -88,6 +88,7 @@ async function stillLive() {
 
   const started = Date.now();
   let lastLog = 0;
+  let volumeChecked = false;
   while (true) {
     await page.waitForTimeout(15000);
     let st = null;
@@ -95,6 +96,20 @@ async function stillLive() {
       st = await page.evaluate(() => window.__recState || null);
     } catch (e) {
       console.log('eval err', e.message);
+    }
+    if (!volumeChecked && Date.now() - started > 180000) {
+      volumeChecked = true;
+      const part = path.join(OUT, 'part_0001.webm');
+      if (fs.existsSync(part)) {
+        try {
+          const r = require('child_process').spawnSync('ffmpeg', ['-hide_banner', '-i', part, '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
+          const txt = String((r.stderr || '') + (r.stdout || ''));
+          const m = txt.match(/mean_volume:\s*(-?[\d.]+) dB/);
+          console.log('VOLUME_CHECK mean_volume=' + (m ? m[1] : 'unknown') + ' dB (silent if -91)');
+        } catch (e) { console.log('volume check err', e.message); }
+      } else {
+        console.log('VOLUME_CHECK no chunk yet');
+      }
     }
     if (st && Date.now() - lastLog > 60000) {
       console.log('state', JSON.stringify(st));

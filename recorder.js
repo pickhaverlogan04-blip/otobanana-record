@@ -1,51 +1,136 @@
 (function () {
   if (window.__recInstalled) return;
   window.__recInstalled = true;
-  window.__recState = { phase: 'init', tracks: 0, chunks: 0, startedAt: null, err: null, url: location.href };
-  var recorder = null, idx = 0, used = false;
+
+  var S = (window.__recState = {
+    phase: 'init',
+    tracks: 0,
+    chunks: 0,
+    startedAt: null,
+    err: null,
+    url: location.href,
+    mode: null,
+    ctxState: null,
+    muted: null,
+    taps: 0,
+    retries: 0
+  });
+
+  var recorder = null;
+  var currentStream = null;
+  var idx = 0;
+  var started = false;
+  var tapCtx = null;
+  var tapDest = null;
+  var tapNodes = [];
+  var origConnect = null;
+  var lastChunkAt = 0;
 
   function blobToBase64(blob, cb) {
-    var fr = new FileReader();
-    fr.onload = function () {
-      var s = String(fr.result || '');
-      cb(s.indexOf(',') >= 0 ? s.split(',')[1] : s);
-    };
-    fr.onerror = function () { cb(''); };
-    fr.readAsDataURL(blob);
-  }
-
-  function start(track) {
-    if (used || !track) return;
-    used = true;
-    window.__recState.phase = 'starting';
-    var ms = new MediaStream([track]);
     try {
-      recorder = new MediaRecorder(ms, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 192000 });
-    } catch (e) {
-      try { recorder = new MediaRecorder(ms); } catch (e2) { window.__recState.err = String(e2); return; }
-    }
-    recorder.ondataavailable = function (ev) {
-      if (!ev.data || ev.data.size === 0) return;
-      idx++;
-      window.__recState.chunks = idx;
-      var n = idx;
-      blobToBase64(ev.data, function (b64) {
-        if (!b64) return;
-        try {
-          if (window.__deliverChunk) window.__deliverChunk(b64, n);
-        } catch (e) { window.__recState.err = String(e); }
-      });
-    };
-    recorder.onerror = function (e) { window.__recState.err = String((e && e.error) || e); };
-    recorder.start(30000);
-    window.__recState.phase = 'recording';
-    window.__recState.startedAt = Date.now();
+      var fr = new FileReader();
+      fr.onload = function () {
+        var s = String(fr.result || '');
+        cb(s.indexOf(',') >= 0 ? s.split(',')[1] : s);
+      };
+      fr.onerror = function () { cb(''); };
+      fr.readAsDataURL(blob);
+    } catch (e) { cb(''); }
   }
 
-  window.__stopRec = function () {
-    try { if (recorder && recorder.state !== 'inactive') recorder.stop(); } catch (e) {}
-    window.__recState.phase = 'stopped';
-  };
+  function startRec(stream, mode) {
+    if (!stream || !stream.getAudioTracks || stream.getAudioTracks().length === 0) {
+      S.err = 'stream has no audio track (' + mode + ')';
+      return;
+    }
+    try {
+      if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch (e) {} }
+      var opts = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 256000 };
+      try {
+        recorder = new MediaRecorder(stream, opts);
+      } catch (e1) {
+        recorder = new MediaRecorder(stream);
+      }
+      currentStream = stream;
+      recorder.ondataavailable = function (ev) {
+        if (!ev.data || ev.data.size === 0) return;
+        idx++;
+        S.chunks = idx;
+        S.lastChunkAt = Date.now();
+        lastChunkAt = Date.now();
+        var n = idx;
+        blobToBase64(ev.data, function (x) {
+          if (!x) return;
+          try { if (window.__deliverChunk) window.__deliverChunk(x, n); } catch (e) { S.err = String(e); }
+        });
+      };
+      recorder.onerror = function (e) { S.err = String((e && e.error) || e); };
+      recorder.start(20000);
+      S.phase = 'recording';
+      S.mode = mode;
+      if (!S.startedAt) S.startedAt = Date.now();
+    } catch (e) {
+      S.err = 'startRec:' + (e && e.message ? e.message : e);
+    }
+  }
+
+  function ensureTap(ctx, node) {
+    try {
+      if (tapCtx !== ctx) {
+        tapCtx = ctx;
+        tapDest = ctx.createMediaStreamDestination();
+        S.ctxState = ctx.state;
+        try { ctx.resume(); } catch (e) {}
+      }
+      if (node) {
+        try { origConnect.call(node, tapDest); S.taps++; } catch (e) {}
+      }
+      if (!started && tapDest) {
+        started = true;
+        startRec(tapDest.stream, 'tap');
+      }
+    } catch (e) {
+      S.err = 'tap:' + (e && e.message ? e.message : e);
+    }
+  }
+
+  try {
+    var ACTX = window.AudioContext || window.webkitAudioContext;
+    if (ACTX && window.AudioNode) {
+      origConnect = AudioNode.prototype.connect;
+      AudioNode.prototype.connect = function (dest) {
+        var r = origConnect.apply(this, arguments);
+        try {
+          if (dest && this.context && dest === this.context.destination) {
+            tapNodes.push(this);
+            ensureTap(this.context, this);
+          }
+        } catch (e) {}
+        return r;
+      };
+    }
+  } catch (e) {
+    S.err = 'hook:' + (e && e.message ? e.message : e);
+  }
+
+  function fromTrack(track) {
+    S.tracks++;
+    try { if (track.muted) S.muted = true; } catch (e) {}
+    if (started) return;
+    try {
+      var AC2 = window.AudioContext || window.webkitAudioContext;
+      var ctx = new AC2();
+      var src = ctx.createMediaStreamSource(new MediaStream([track]));
+      var dest = ctx.createMediaStreamDestination();
+      src.connect(dest);
+      try { ctx.resume(); } catch (e) {}
+      S.ctxState = ctx.state;
+      started = true;
+      startRec(dest.stream, 'track-ctx');
+    } catch (e) {
+      S.err = 'trackCtx:' + (e && e.message ? e.message : e);
+    }
+  }
 
   var OrigPC = window.RTCPeerConnection;
   if (OrigPC) {
@@ -53,7 +138,7 @@
       var pc = new OrigPC(cfg, cons);
       try {
         pc.addEventListener('track', function (e) {
-          if (e.track && e.track.kind === 'audio') { window.__recState.tracks++; start(e.track); }
+          if (e.track && e.track.kind === 'audio') fromTrack(e.track);
         });
       } catch (err) {}
       return pc;
@@ -71,27 +156,37 @@
         set: function (v) {
           desc.set.call(this, v);
           try {
-            if (v && v.getAudioTracks && v.getAudioTracks().length) {
-              window.__recState.tracks++;
-              start(v.getAudioTracks()[0]);
-            }
+            if (v && v.getAudioTracks && v.getAudioTracks().length) fromTrack(v.getAudioTracks()[0]);
           } catch (e) {}
         }
       });
     }
   } catch (e) {}
 
+  window.__stopRec = function () {
+    try { if (recorder && recorder.state !== 'inactive') recorder.stop(); } catch (e) {}
+    S.phase = 'stopped';
+  };
+
+  // 自检：若长时间没有任何音频分片，尝试重建录制器
   setInterval(function () {
-    if (used) return;
+    if (!started) return;
+    if (S.chunks === 0 && S.startedAt && Date.now() - S.startedAt > 45000 && S.retries < 3) {
+      S.retries++;
+      var s = tapDest && tapDest.stream ? tapDest.stream : currentStream;
+      S.err = 'retry#' + S.retries;
+      startRec(s, (S.mode || 'retry') + '+retry');
+    }
+  }, 10000);
+
+  // 无 MediaStream 时的兜底：从页面 audio/video 元素抓音轨
+  setInterval(function () {
+    if (started) return;
     var els = document.querySelectorAll('audio,video');
     for (var i = 0; i < els.length; i++) {
       try {
         var s = els[i].captureStream ? els[i].captureStream() : null;
-        if (s && s.getAudioTracks().length > 0) {
-          window.__recState.tracks++;
-          start(s.getAudioTracks()[0]);
-          return;
-        }
+        if (s && s.getAudioTracks().length > 0) { fromTrack(s.getAudioTracks()[0]); return; }
       } catch (e) {}
     }
   }, 5000);

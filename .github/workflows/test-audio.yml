@@ -21,3 +21,25 @@ jobs:
 
       - name: Test audio capture
         run: node test-audio.js
+
+      - name: Verify audio
+        if: always()
+        run: |
+          ls -la out || true
+          if ls out/part_*.webm >/dev/null 2>&1; then
+            cat $(ls out/part_*.webm | sort) > out/all.webm
+            echo '--- ffprobe ---'
+            ffprobe -v error -show_entries stream=codec_type,codec_name,channels,sample_rate,bit_rate -of default=noprint_wrappers=1 out/all.webm || true
+            echo '--- volume ---'
+            ffmpeg -y -i out/all.webm -af volumedetect -f null - 2>&1 | grep -E 'mean_volume|max_volume' || true
+            ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k out/test.m4a || true
+            ls -la out
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-test
+          path: out
+          retention-days: 3
+          if-no-files-found: warn

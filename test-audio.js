@@ -1,8 +1,6 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 
-const MP3 = 'https://media.otobanana.com/converted/users/a283e196-f4f8-4811-962b-a265c4ba6872/casts/89905f11-68cf-42cf-a529-83ca09760b88.mp3';
-
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -25,27 +23,41 @@ const MP3 = 'https://media.otobanana.com/converted/users/a283e196-f4f8-4811-962b
   await page.addInitScript({ path: 'recorder.js' });
   await page.goto('about:blank');
 
-  const r = await page.evaluate(async (src) => {
+  const r = await page.evaluate(async () => {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       const ac = new AC();
-      const res = await fetch(src);
-      const arr = await res.arrayBuffer();
-      const audioBuf = await ac.decodeAudioData(arr);
-      const node = ac.createBufferSource();
-      node.buffer = audioBuf;
-      node.loop = true;
-      const gain = ac.createGain();
-      gain.gain.value = 1.0;
-      node.connect(gain);
-      gain.connect(ac.destination);
-      node.start();
+      const osc = ac.createOscillator();
+      const dest = ac.createMediaStreamDestination();
+      osc.frequency.value = 440;
+      osc.connect(dest);
+      osc.start();
       await ac.resume();
-      return 'decoded ' + audioBuf.duration.toFixed(1) + 's, state=' + ac.state;
+
+      const pc1 = new RTCPeerConnection();
+      const pc2 = new RTCPeerConnection();
+      pc1.onicecandidate = (e) => { if (e.candidate) pc2.addIceCandidate(e.candidate); };
+      pc2.onicecandidate = (e) => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
+
+      dest.stream.getTracks().forEach((t) => pc1.addTrack(t, dest.stream));
+
+      const remoteStream = new MediaStream();
+      pc2.ontrack = (e) => { remoteStream.addTrack(e.track); };
+
+      const offer = await pc1.createOffer();
+      await pc1.setLocalDescription(offer);
+      await pc2.setRemoteDescription(offer);
+      const answer = await pc2.createAnswer();
+      await pc2.setLocalDescription(answer);
+      await pc1.setRemoteDescription(answer);
+
+      window.__remote = remoteStream;
+      await new Promise((res) => setTimeout(res, 3000));
+      return 'webrtc ok, remote audio tracks=' + remoteStream.getAudioTracks().length + ', state=' + remoteStream.getAudioTracks().map(t => t.readyState + '/muted=' + t.muted).join(',');
     } catch (e) {
       return 'err:' + e.message;
     }
-  }, MP3);
+  });
   console.log('setup:', r);
 
   for (let i = 0; i < 7; i++) {

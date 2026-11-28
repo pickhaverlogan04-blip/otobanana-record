@@ -1,0 +1,79 @@
+name: test-e2e
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-Linux-v1
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils xvfb
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run full pipeline
+        run: |
+          mkdir -p out
+          export XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
+          pulseaudio -D --exit-idle-time=-1 --log-target=file:/tmp/pulse.log || true
+          sleep 3
+          pactl load-module module-null-sink sink_name=vsink rate=48000 channels=2 || true
+          pactl set-default-sink vsink || true
+          (parec -d vsink.monitor --format=s16le --rate=48000 --channels=2 --file-format=raw > out/audio.pcm 2> out/parec.err) &
+          PAREC=$!
+          xvfb-run -a --server-args="-screen 0 1280x900x24" node test-e2e.js || true
+          sleep 2
+          kill $PAREC 2>/dev/null || true
+          sleep 2
+          rm -rf out/video || true
+          ls -la out
+          AUDIO=""
+          if [ -s out/audio.pcm ]; then
+            ffmpeg -y -f s16le -ar 48000 -ac 2 -i out/audio.pcm -c:a aac -b:a 192k out/system.m4a || true
+            if [ -s out/system.m4a ]; then AUDIO="out/system.m4a"; echo "audio: system"; fi
+          fi
+          if [ -z "$AUDIO" ] && ls out/part_*.webm >/dev/null 2>&1; then
+            cat $(ls out/part_*.webm | sort) > out/all.webm
+            ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k out/recording.m4a || true
+            if [ -s out/recording.m4a ]; then AUDIO="out/recording.m4a"; echo "audio: page"; fi
+          fi
+          if [ -n "$AUDIO" ] && [ -s out/screen.webm ]; then
+            ffmpeg -y -i out/screen.webm -i "$AUDIO" -map 0:v:0 -map 1:a:0 \
+              -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p -c:a copy -shortest out/recording_with_chat.mp4 || true
+          fi
+          echo "=== FINAL FILES ==="
+          ls -la out
+          echo "=== AUDIO CHECK ==="
+          for f in out/recording_with_chat.mp4 out/system.m4a out/recording.m4a; do
+            if [ -s "$f" ]; then
+              echo "checked $f"
+              ffmpeg -hide_banner -i "$f" -af volumedetect -f null - 2>&1 | grep -E 'mean_volume|max_volume'
+              ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 "$f"
+              break
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test
+          path: out
+          retention-days: 3
+          if-no-files-found: warn

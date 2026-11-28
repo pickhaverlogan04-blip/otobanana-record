@@ -39,7 +39,8 @@ jobs:
           pactl info || true
           (parec -d vsink.monitor --format=s16le --rate=48000 --channels=2 --file-format=raw > out/audio.pcm 2> out/parec.err) &
           PAREC=$!
-          node test-audio.js
+          sudo apt-get install -y xvfb
+          xvfb-run -a --server-args="-screen 0 1280x900x24" node test-audio.js
           sleep 2
           kill $PAREC 2>/dev/null || true
           sleep 2

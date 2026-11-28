@@ -19,43 +19,32 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: pw-chromium-Linux-v1
+
       - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg pulseaudio pulseaudio-utils
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
 
-      - name: Setup audio device
+      - name: Test system audio capture
         run: |
-          sudo apt-get install -y pulseaudio pulseaudio-utils
+          mkdir -p out
+          export XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
           pulseaudio -D --exit-idle-time=-1 --log-target=file:/tmp/pulse.log || true
-          sleep 2
-          pactl load-module module-null-sink sink_name=vsink || true
+          sleep 3
+          pactl load-module module-null-sink sink_name=vsink rate=48000 channels=2 || true
           pactl set-default-sink vsink || true
           pactl info || true
-
-      - name: Test audio capture
-        run: node test-audio.js
-
-      - name: Verify audio
-        if: always()
-        run: |
-          ls -la out || true
-          if ls out/part_*.webm >/dev/null 2>&1; then
-            cat $(ls out/part_*.webm | sort) > out/all.webm
-            echo '--- ffprobe ---'
-            ffprobe -v error -show_entries stream=codec_type,codec_name,channels,sample_rate,bit_rate -of default=noprint_wrappers=1 out/all.webm || true
-            echo '--- volume ---'
-            ffmpeg -y -i out/all.webm -af volumedetect -f null - 2>&1 | grep -E 'mean_volume|max_volume' || true
-            ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k out/test.m4a || true
-            ls -la out
-          fi
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: audio-test
-          path: out
-          retention-days: 3
-          if-no-files-found: warn
+          (parec -d vsink.monitor --format=s16le --rate=48000 --channels=2 --file-format=raw > out/audio.pcm 2> out/parec.err) &
+          PAREC=$!
+          node test-audio.js
+          sleep 2
+          kill $PAREC 2>/dev/null || true
+          sleep 2
+          ls -la out
+          echo "--- parec.err ---"
+          head -c 300 out/parec.err || true
+          echo "--- volume of system capture ---"
+          ffmpeg -hide_banner -f s16le -ar 48000 -ac 2 -i out/audio.pcm -af volumedetect -f null - 2>&1 | grep -E 'mean_volume|max_volume' || echo "no pcm"

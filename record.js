@@ -35,7 +35,7 @@ async function stillLive() {
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: [
       '--autoplay-policy=no-user-gesture-required',
       '--disable-blink-features=AutomationControlled',

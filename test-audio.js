@@ -4,7 +4,7 @@ const MP3 = 'https://media.otobanana.com/converted/users/a283e196-f4f8-4811-962b
 
 (async () => {
   const browser = await chromium.launch({
-    headless: true,
+    headless: false,
     args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream'],
   });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });

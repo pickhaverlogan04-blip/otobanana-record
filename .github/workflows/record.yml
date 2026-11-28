@@ -71,7 +71,28 @@ jobs:
           OTO_COOKIES: ${{ secrets.OTO_COOKIES }}
           OUT_DIR: out
           TITLE: ${{ needs.check.outputs.title }}
-        run: node record.js
+        run: |
+          mkdir -p out
+          export XDG_RUNTIME_DIR=/tmp/xdg
+          mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
+          sudo apt-get install -y pulseaudio pulseaudio-utils >/dev/null 2>&1 || true
+          pulseaudio -D --exit-idle-time=-1 --log-target=file:/tmp/pulse.log || true
+          sleep 3
+          pactl load-module module-null-sink sink_name=vsink rate=48000 channels=2 || true
+          pactl set-default-sink vsink || true
+          pactl info || true
+          echo "--- start system audio capture (parec) ---"
+          (parec -d vsink.monitor --format=s16le --rate=48000 --channels=2 --file-format=raw > out/audio.pcm 2> out/parec.err) &
+          PAREC_PID=$!
+          echo "parec pid=$PAREC_PID"
+          node record.js || echo "record.js exited non-zero"
+          sleep 3
+          kill $PAREC_PID 2>/dev/null || true
+          sleep 2
+          echo "--- pcm size ---"
+          ls -la out/audio.pcm || true
+          head -c 200 out/parec.err || true
+          ls -la out
 
       - name: Convert audio and video
         if: always()
@@ -80,24 +101,32 @@ jobs:
         run: |
           rm -rf out/video || true
           ls -la out || true
-          if ls out/part_*.webm >/dev/null 2>&1; then
+          AUDIO=""
+          if [ -s out/audio.pcm ]; then
+            echo "convert system capture (parec)"
+            ffmpeg -y -f s16le -ar 48000 -ac 2 -i out/audio.pcm -c:a aac -b:a 192k "out/system.m4a" || true
+            if [ -s out/system.m4a ]; then AUDIO="out/system.m4a"; echo "audio source: system"; fi
+          fi
+          if [ -z "$AUDIO" ] && ls out/part_*.webm >/dev/null 2>&1; then
+            echo "convert page capture (mediarecorder)"
             cat $(ls out/part_*.webm | sort) > out/all.webm
             ffmpeg -y -i out/all.webm -vn -c:a aac -b:a 192k "out/recording.m4a" || true
+            if [ -s out/recording.m4a ]; then AUDIO="out/recording.m4a"; echo "audio source: page"; fi
           fi
-          if [ -s out/screen.webm ] && [ -s out/recording.m4a ]; then
-            echo "merge screen video + audio"
-            ffmpeg -y -i out/screen.webm -i out/recording.m4a \
+          if [ -n "$AUDIO" ] && [ -s out/screen.webm ]; then
+            echo "merge screen video + audio ($AUDIO)"
+            ffmpeg -y -i out/screen.webm -i "$AUDIO" \
               -map 0:v:0 -map 1:a:0 -c:v libx264 -preset veryfast -crf 26 -pix_fmt yuv420p \
               -c:a copy -shortest "out/recording_with_chat.mp4" || true
           fi
-          if [ -s out/recording.m4a ] && [ ! -s out/recording_with_chat.mp4 ]; then
+          if [ -n "$AUDIO" ] && [ ! -s out/recording_with_chat.mp4 ]; then
             curl -sL --max-time 30 "$AVATAR" -o out/cover.png || true
             if [ -s out/cover.png ]; then
-              ffmpeg -y -loop 1 -framerate 1 -i out/cover.png -i out/recording.m4a \
+              ffmpeg -y -loop 1 -framerate 1 -i out/cover.png -i "$AUDIO" \
                 -vf "scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2:color=black" \
                 -c:v libx264 -tune stillimage -pix_fmt yuv420p -c:a copy -shortest "out/recording.mp4" || true
             else
-              ffmpeg -y -f lavfi -i color=c=black:s=1080x1080:r=1 -i out/recording.m4a \
+              ffmpeg -y -f lavfi -i color=c=black:s=1080x1080:r=1 -i "$AUDIO" \
                 -c:v libx264 -tune stillimage -pix_fmt yuv420p -c:a copy -shortest "out/recording.mp4" || true
             fi
           fi
@@ -106,13 +135,17 @@ jobs:
       - name: Drop silent result
         if: always()
         run: |
-          if [ ! -s out/recording.m4a ]; then
+          CAND=""
+          for f in out/recording_with_chat.mp4 out/system.m4a out/recording.m4a out/recording.mp4; do
+            if [ -s "$f" ]; then CAND="$f"; break; fi
+          done
+          if [ -z "$CAND" ]; then
             echo "::error::no audio recorded at all, nothing to keep"
             rm -rf out/*
             exit 1
           fi
-          MV=$(ffmpeg -hide_banner -i out/recording.m4a -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [-0-9.]*' | head -1 | grep -o '[-0-9.]*$')
-          echo "mean_volume=$MV"
+          MV=$(ffmpeg -hide_banner -i "$CAND" -af volumedetect -f null - 2>&1 | grep -o 'mean_volume: [-0-9.]*' | head -1 | grep -o '[-0-9.]*$')
+          echo "checked=$CAND mean_volume=$MV"
           if [ -z "$MV" ]; then
             echo "::error::cannot measure volume, drop"
             rm -rf out/*

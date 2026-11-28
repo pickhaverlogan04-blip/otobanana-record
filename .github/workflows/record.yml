@@ -75,7 +75,7 @@ jobs:
           mkdir -p out
           export XDG_RUNTIME_DIR=/tmp/xdg
           mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
-          sudo apt-get install -y pulseaudio pulseaudio-utils >/dev/null 2>&1 || true
+          sudo apt-get install -y pulseaudio pulseaudio-utils xvfb >/dev/null 2>&1 || true
           pulseaudio -D --exit-idle-time=-1 --log-target=file:/tmp/pulse.log || true
           sleep 3
           pactl load-module module-null-sink sink_name=vsink rate=48000 channels=2 || true
@@ -85,7 +85,7 @@ jobs:
           (parec -d vsink.monitor --format=s16le --rate=48000 --channels=2 --file-format=raw > out/audio.pcm 2> out/parec.err) &
           PAREC_PID=$!
           echo "parec pid=$PAREC_PID"
-          node record.js || echo "record.js exited non-zero"
+          xvfb-run -a --server-args="-screen 0 1280x900x24" node record.js || echo "record.js exited non-zero"
           sleep 3
           kill $PAREC_PID 2>/dev/null || true
           sleep 2
